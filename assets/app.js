@@ -142,7 +142,8 @@ async function runPrediction() {
     }
 
     if (!res.ok || !data.ok) {
-      throw new Error(data.error || 'Gagal mengambil prediksi.');
+      const message = [data.error, data.detail].filter(Boolean).join(' | ');
+      throw new Error(message || 'Gagal mengambil prediksi.');
     }
 
     renderPredictions(data.predictions);

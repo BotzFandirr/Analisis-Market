@@ -20,56 +20,88 @@ function fetchCandles(string $pair, string $resolution = '240', int $lookbackDay
 {
     $to = time();
     $from = $to - ($lookbackDays * 86400);
-    $query = http_build_query([
-        'symbol' => $pair,
-        'resolution' => $resolution,
-        'from' => (string)$from,
-        'to' => (string)$to,
-    ]);
+    $querySets = [];
+    $pairLower = strtolower($pair);
+    $pairUnderscore = strtolower(preg_replace('/(IDR|USDT|BTC|ETH)$/', '_$1', $pair) ?? $pair);
+    foreach ([$pair, $pairLower, $pairUnderscore] as $symbol) {
+        $querySets[] = http_build_query([
+            'symbol' => $symbol,
+            'resolution' => $resolution,
+            'from' => (string)$from,
+            'to' => (string)$to,
+        ]);
+    }
 
-    $url = "https://indodax.com/tradingview/history_v2?$query";
+    $urls = [];
+    foreach ($querySets as $qs) {
+        $urls[] = "https://indodax.com/tradingview/history_v2?$qs";
+        $urls[] = "https://indodax.com/tradingview/history?$qs";
+    }
+    $urls = array_values(array_unique($urls));
 
     $resp = false;
     $code = 0;
     $err = '';
+    $errors = [];
 
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 20,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_USERAGENT => 'AnalisisMarketBot/1.0',
-        ]);
+    foreach ($urls as $url) {
+        $resp = false;
+        $code = 0;
+        $err = '';
 
-        $resp = curl_exec($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-    } else {
-        $ctx = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 20,
-                'header' => "User-Agent: AnalisisMarketBot/1.0\r\n",
-            ],
-        ]);
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 20,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)',
+                CURLOPT_HTTPHEADER => [
+                    'Accept: application/json,text/plain,*/*',
+                    'Origin: https://indodax.com',
+                    'Referer: https://indodax.com/',
+                ],
+            ]);
 
-        $resp = @file_get_contents($url, false, $ctx);
-        $httpResponseHeader = $http_response_header ?? [];
-        if (isset($httpResponseHeader[0]) && preg_match('/\\s(\\d{3})\\s/', $httpResponseHeader[0], $m)) {
-            $code = (int)$m[1];
+            $resp = curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $err = curl_error($ch);
+            curl_close($ch);
+        } else {
+            $ctx = stream_context_create([
+                'http' => [
+                    'method' => 'GET',
+                    'timeout' => 20,
+                    'header' =>
+                        "User-Agent: Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)\r\n" .
+                        "Accept: application/json,text/plain,*/*\r\n" .
+                        "Origin: https://indodax.com\r\n" .
+                        "Referer: https://indodax.com/\r\n",
+                ],
+            ]);
+
+            $resp = @file_get_contents($url, false, $ctx);
+            $httpResponseHeader = $http_response_header ?? [];
+            if (isset($httpResponseHeader[0]) && preg_match('/\\s(\\d{3})\\s/', $httpResponseHeader[0], $m)) {
+                $code = (int)$m[1];
+            }
+            if ($resp === false) {
+                $err = 'Gagal mengambil data via HTTP stream.';
+            }
         }
-        if ($resp === false) {
-            $err = 'Gagal mengambil data via HTTP stream.';
+
+        if ($resp !== false && $code > 0 && $code < 400) {
+            break;
         }
+
+        $errors[] = sprintf('%s => HTTP %d %s', $url, $code, $err);
     }
 
-    if ($resp === false || $code >= 400) {
+    if ($resp === false || $code >= 400 || $code === 0) {
         jsonOut([
             'ok' => false,
             'error' => 'Gagal mengambil data Indodax.',
-            'detail' => $err !== '' ? $err : "HTTP $code",
+            'detail' => implode(' | ', array_slice($errors, 0, 2)),
         ], 502);
     }
 
