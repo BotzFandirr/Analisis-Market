@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 header('Content-Type: application/json; charset=utf-8');
 
-function jsonOut(array $data, int $status = 200): never
+function jsonOut(array $data, int $status = 200): void
 {
     http_response_code($status);
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -68,18 +68,22 @@ function requestUrl(string $url): array
 
 function resolutionToSeconds(string $resolution): int
 {
-    return match ($resolution) {
-        '60' => 3600,
-        '240' => 14400,
-        'D' => 86400,
-        default => 14400,
-    };
+    switch ($resolution) {
+        case '60':
+            return 3600;
+        case '240':
+            return 14400;
+        case 'D':
+            return 86400;
+        default:
+            return 14400;
+    }
 }
 
 function pairToApiPair(string $pair): string
 {
     foreach (['USDT', 'IDR', 'BTC', 'ETH'] as $quote) {
-        if (str_ends_with($pair, $quote)) {
+        if (substr($pair, -strlen($quote)) === $quote) {
             $base = substr($pair, 0, -strlen($quote));
             if ($base !== '') {
                 return strtolower($base . '_' . $quote);
