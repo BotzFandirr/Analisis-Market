@@ -31,12 +31,19 @@ function renderPredictions(preds) {
     '7_hari': '1 Minggu',
     '30_hari': '1 Bulan',
   };
+  const directionLabels = {
+    naik: 'Naik',
+    turun: 'Turun',
+    sideways: 'Sideways',
+  };
 
   predictionsEl.innerHTML = Object.entries(preds).map(([k, v]) => `
     <article class="pred-card">
       <h3>${labels[k] ?? k}</h3>
       <div class="price">${idr.format(v.target)}</div>
       <div class="range">Range: ${idr.format(v.range_low)} - ${idr.format(v.range_high)}</div>
+      <div class="range">Arah: <strong>${directionLabels[v.direction] ?? v.direction}</strong> (${v.direction_confidence}%)
+      </div>
       <div class="conf">Kepercayaan Model: ${v.confidence}%</div>
     </article>
   `).join('');
