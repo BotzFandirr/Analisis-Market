@@ -136,3 +136,24 @@ input, select, button {
 @media (max-width: 560px) {
   .prediction-grid { grid-template-columns: 1fr; }
 }
+
+/* --- Pengaturan Responsif Grafik --- */
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 320px; /* Tinggi proporsional untuk tampilan desktop */
+  margin-top: 16px;
+}
+
+/* Sesuaikan tinggi grafik saat dibuka di HP/Tablet agar tidak menghabiskan layar */
+@media (max-width: 960px) {
+  .chart-container {
+    height: 260px;
+  }
+}
+
+@media (max-width: 560px) {
+  .chart-container {
+    height: 220px;
+  }
+}
