@@ -114,7 +114,13 @@ async function runPrediction() {
 
   try {
     const res = await fetch(`api/predict.php?pair=${encodeURIComponent(pair)}&resolution=${encodeURIComponent(resolution)}`);
-    const data = await res.json();
+    const raw = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      throw new Error('Respons API bukan JSON valid. Cek server PHP / endpoint api/predict.php.');
+    }
 
     if (!data.ok) {
       throw new Error(data.error || 'Gagal mengambil prediksi.');

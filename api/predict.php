@@ -29,18 +29,41 @@ function fetchCandles(string $pair, string $resolution = '240', int $lookbackDay
 
     $url = "https://indodax.com/tradingview/history_v2?$query";
 
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 20,
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_USERAGENT => 'AnalisisMarketBot/1.0',
-    ]);
+    $resp = false;
+    $code = 0;
+    $err = '';
 
-    $resp = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    $err = curl_error($ch);
-    curl_close($ch);
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_USERAGENT => 'AnalisisMarketBot/1.0',
+        ]);
+
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => 20,
+                'header' => "User-Agent: AnalisisMarketBot/1.0\r\n",
+            ],
+        ]);
+
+        $resp = @file_get_contents($url, false, $ctx);
+        $httpResponseHeader = $http_response_header ?? [];
+        if (isset($httpResponseHeader[0]) && preg_match('/\\s(\\d{3})\\s/', $httpResponseHeader[0], $m)) {
+            $code = (int)$m[1];
+        }
+        if ($resp === false) {
+            $err = 'Gagal mengambil data via HTTP stream.';
+        }
+    }
 
     if ($resp === false || $code >= 400) {
         jsonOut([
