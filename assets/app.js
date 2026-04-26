@@ -5,6 +5,11 @@ const predictionsEl = document.getElementById('predictions');
 const signalsEl = document.getElementById('signals');
 
 let chart;
+predictionsEl.innerHTML = `
+  <article class="pred-card">
+    Klik <strong>Jalankan Prediksi</strong> untuk mulai analisis.
+  </article>
+`;
 
 const idr = new Intl.NumberFormat('id-ID', {
   style: 'currency',
@@ -55,6 +60,10 @@ function renderSignals(data) {
 }
 
 function renderChart(history, preds) {
+  if (typeof Chart === 'undefined') {
+    return;
+  }
+
   const labels = history.map((x) => new Date(x.time * 1000).toLocaleDateString('id-ID'));
   const values = history.map((x) => x.close);
 
@@ -113,16 +122,26 @@ async function runPrediction() {
   runBtn.textContent = 'Menghitung...';
 
   try {
-    const res = await fetch(`api/predict.php?pair=${encodeURIComponent(pair)}&resolution=${encodeURIComponent(resolution)}`);
+    const apiUrl = new URL('./api/predict.php', window.location.href);
+    apiUrl.searchParams.set('pair', pair);
+    apiUrl.searchParams.set('resolution', resolution);
+
+    const res = await fetch(apiUrl.toString(), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
     const raw = await res.text();
     let data;
     try {
       data = JSON.parse(raw);
     } catch (_) {
-      throw new Error('Respons API bukan JSON valid. Cek server PHP / endpoint api/predict.php.');
+      const hint = raw.trim().startsWith('<')
+        ? 'Server mengembalikan HTML (bukan JSON). Pastikan jalankan via `php -S` dari folder project.'
+        : 'Respons API bukan JSON valid.';
+      throw new Error(`${hint} Cek endpoint api/predict.php.`);
     }
 
-    if (!data.ok) {
+    if (!res.ok || !data.ok) {
       throw new Error(data.error || 'Gagal mengambil prediksi.');
     }
 
@@ -138,4 +157,8 @@ async function runPrediction() {
 }
 
 runBtn.addEventListener('click', runPrediction);
-window.addEventListener('load', runPrediction);
+pairEl.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') {
+    runPrediction();
+  }
+});
