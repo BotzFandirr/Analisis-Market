@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+
 header('Content-Type: application/json; charset=utf-8');
 
 function jsonOut(array $data, int $status = 200): void
@@ -28,14 +31,12 @@ function requestUrl(string $url): array
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 20,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)',
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json,text/plain,*/*',
-                'Origin: https://indodax.com',
-                'Referer: https://indodax.com/',
+                'Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
             ],
         ]);
-
         $resp = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $err = curl_error($ch);
@@ -46,20 +47,17 @@ function requestUrl(string $url): array
                 'method' => 'GET',
                 'timeout' => 20,
                 'header' =>
-                    "User-Agent: Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)\r\n" .
-                    "Accept: application/json,text/plain,*/*\r\n" .
-                    "Origin: https://indodax.com\r\n" .
-                    "Referer: https://indodax.com/\r\n",
+                    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36\r\n" .
+                    "Accept: application/json,text/plain,*/*\r\n"
             ],
         ]);
-
         $resp = @file_get_contents($url, false, $ctx);
         $httpResponseHeader = $http_response_header ?? [];
         if (isset($httpResponseHeader[0]) && preg_match('/\\s(\\d{3})\\s/', $httpResponseHeader[0], $m)) {
             $code = (int)$m[1];
         }
         if ($resp === false) {
-            $err = 'Gagal mengambil data via HTTP stream.';
+            $err = 'Stream failed.';
         }
     }
 
@@ -69,14 +67,10 @@ function requestUrl(string $url): array
 function resolutionToSeconds(string $resolution): int
 {
     switch ($resolution) {
-        case '60':
-            return 3600;
-        case '240':
-            return 14400;
-        case 'D':
-            return 86400;
-        default:
-            return 14400;
+        case '60': return 3600;
+        case '240': return 14400;
+        case 'D': return 86400;
+        default: return 14400;
     }
 }
 
@@ -85,54 +79,53 @@ function pairToApiPair(string $pair): string
     foreach (['USDT', 'IDR', 'BTC', 'ETH'] as $quote) {
         if (substr($pair, -strlen($quote)) === $quote) {
             $base = substr($pair, 0, -strlen($quote));
-            if ($base !== '') {
-                return strtolower($base . '_' . $quote);
-            }
+            if ($base !== '') return strtolower($base . '_' . $quote);
         }
     }
     return strtolower($pair);
 }
 
-function candlesFromTrades(string $pair, string $resolution, int $from, int $to): array
+function candlesFromCryptoCompare(string $pair, string $resolution): array
 {
-    $apiPair = pairToApiPair($pair);
-    $url = "https://indodax.com/api/{$apiPair}/trades";
+    $base = 'BTC';
+    $quote = 'IDR';
+    foreach (['USDT', 'IDR', 'BTC', 'ETH'] as $q) {
+        if (substr(strtoupper($pair), -strlen($q)) === $q) {
+            $base = substr(strtoupper($pair), 0, -strlen($q));
+            $quote = $q;
+            break;
+        }
+    }
+
+    $endpoint = 'histohour';
+    $aggregate = 1;
+    if ($resolution === '240') {
+        $aggregate = 4;
+    } elseif ($resolution === 'D') {
+        $endpoint = 'histoday';
+    }
+
+    $url = "https://min-api.cryptocompare.com/data/v2/{$endpoint}?fsym={$base}&tsym={$quote}&limit=200&aggregate={$aggregate}";
     $r = requestUrl($url);
-    if ($r['body'] === false || $r['code'] >= 400 || $r['code'] === 0) {
+    $json = json_decode((string)$r['body'], true);
+
+    if (!isset($json['Data']['Data']) || !is_array($json['Data']['Data'])) {
         return [];
     }
 
-    $trades = json_decode((string)$r['body'], true);
-    if (!is_array($trades) || count($trades) === 0) {
-        return [];
-    }
-
-    $bucket = resolutionToSeconds($resolution);
-    $map = [];
-    foreach ($trades as $t) {
-        $ts = (int)($t['date'] ?? 0);
-        $price = (float)($t['price'] ?? 0);
-        if ($ts < $from || $ts > $to || $price <= 0) {
-            continue;
-        }
-        $k = (int)(floor($ts / $bucket) * $bucket);
-        if (!isset($map[$k])) {
-            $map[$k] = [
-                'time' => $k,
-                'open' => $price,
-                'high' => $price,
-                'low' => $price,
-                'close' => $price,
+    $candles = [];
+    foreach ($json['Data']['Data'] as $c) {
+        if (isset($c['close']) && $c['close'] > 0) {
+            $candles[] = [
+                'time' => (int)$c['time'],
+                'open' => (float)$c['open'],
+                'high' => (float)$c['high'],
+                'low' => (float)$c['low'],
+                'close' => (float)$c['close'],
             ];
-        } else {
-            $map[$k]['high'] = max($map[$k]['high'], $price);
-            $map[$k]['low'] = min($map[$k]['low'], $price);
-            $map[$k]['close'] = $price;
         }
     }
-
-    ksort($map);
-    return array_values($map);
+    return $candles;
 }
 
 function fetchCandles(string $pair, string $resolution = '240', int $lookbackDays = 210): array
@@ -154,45 +147,36 @@ function fetchCandles(string $pair, string $resolution = '240', int $lookbackDay
     $urls = [];
     foreach ($querySets as $qs) {
         $urls[] = "https://indodax.com/tradingview/history_v2?$qs";
-        $urls[] = "https://indodax.com/tradingview/history?$qs";
     }
-    $urls = array_values(array_unique($urls));
 
     $resp = false;
     $code = 0;
-    $errors = [];
-
+    
     foreach ($urls as $url) {
         $r = requestUrl($url);
         $resp = $r['body'];
         $code = (int)$r['code'];
-        $err = (string)$r['error'];
-
-        if ($resp !== false && $code > 0 && $code < 400) {
-            break;
-        }
-
-        $errors[] = sprintf('%s => HTTP %d %s', $url, $code, $err);
+        if ($resp !== false && $code > 0 && $code < 400) break;
     }
 
-    if ($resp === false || $code >= 400 || $code === 0) {
-        $candlesFromTradeFallback = candlesFromTrades($pair, $resolution, $from, $to);
-        if (count($candlesFromTradeFallback) > 20) {
-            return $candlesFromTradeFallback;
-        }
-        jsonOut([
-            'ok' => false,
-            'error' => 'Gagal mengambil data Indodax.',
-            'detail' => implode(' | ', array_slice($errors, 0, 2)),
-        ], 502);
-    }
+    $json = is_string($resp) ? json_decode($resp, true) : null;
+    $isJsonValid = is_array($json) && isset($json['c']) && is_array($json['c']);
 
-    $json = json_decode($resp, true);
-    if (!is_array($json) || !isset($json['c']) || !is_array($json['c'])) {
+    // Jika Indodax memblokir IP Hosting, alihkan ke Super Fallback API Global
+    if ($resp === false || $code >= 400 || $code === 0 || !$isJsonValid) {
+        
+        $candlesGlobal = candlesFromCryptoCompare($pair, $resolution);
+        
+        if (count($candlesGlobal) > 20) {
+            return $candlesGlobal;
+        }
+
+        $debugStr = is_string($resp) ? trim(substr(strip_tags($resp), 0, 40)) : 'No Response';
         jsonOut([
             'ok' => false,
-            'error' => 'Format data Indodax tidak valid.',
-        ], 502);
+            'error' => 'Akses IP Server diblokir. Gagal beralih ke jalur cadangan.',
+            'detail' => 'API Utama dan Global tidak merespons. (Debug: ' . $debugStr . ')',
+        ], 400);
     }
 
     $t = $json['t'] ?? [];
@@ -213,15 +197,14 @@ function fetchCandles(string $pair, string $resolution = '240', int $lookbackDay
         ];
     }
 
-    return array_values(array_filter($candles, fn(array $x): bool => $x['close'] > 0));
+    return array_values(array_filter($candles, function(array $x): bool {
+        return $x['close'] > 0;
+    }));
 }
 
 function ema(array $values, int $period): array
 {
-    if (count($values) < $period) {
-        return [];
-    }
-
+    if (count($values) < $period) return [];
     $k = 2 / ($period + 1);
     $out = [];
     $seed = array_sum(array_slice($values, 0, $period)) / $period;
@@ -231,41 +214,25 @@ function ema(array $values, int $period): array
         $prev = $out[$i - 1] ?? $seed;
         $out[$i] = ($values[$i] * $k) + ($prev * (1 - $k));
     }
-
     return $out;
 }
 
 function rsi(array $values, int $period = 14): ?float
 {
-    if (count($values) <= $period) {
-        return null;
-    }
-
-    $gain = 0.0;
-    $loss = 0.0;
+    if (count($values) <= $period) return null;
+    $gain = 0.0; $loss = 0.0;
     for ($i = count($values) - $period; $i < count($values); $i++) {
         $diff = $values[$i] - $values[$i - 1];
-        if ($diff > 0) {
-            $gain += $diff;
-        } else {
-            $loss += abs($diff);
-        }
+        if ($diff > 0) $gain += $diff; else $loss += abs($diff);
     }
-
-    if ($loss == 0.0) {
-        return 100.0;
-    }
-
+    if ($loss == 0.0) return 100.0;
     $rs = ($gain / $period) / ($loss / $period);
     return 100 - (100 / (1 + $rs));
 }
 
 function atr(array $candles, int $period = 14): ?float
 {
-    if (count($candles) <= $period) {
-        return null;
-    }
-
+    if (count($candles) <= $period) return null;
     $trs = [];
     for ($i = 1; $i < count($candles); $i++) {
         $high = $candles[$i]['high'];
@@ -273,16 +240,13 @@ function atr(array $candles, int $period = 14): ?float
         $prevClose = $candles[$i - 1]['close'];
         $trs[] = max($high - $low, abs($high - $prevClose), abs($low - $prevClose));
     }
-
     return array_sum(array_slice($trs, -$period)) / $period;
 }
 
 function detectPattern(array $candles): array
 {
     $n = count($candles);
-    if ($n < 3) {
-        return ['pattern' => 'netral', 'bias' => 0.0, 'score' => 0];
-    }
+    if ($n < 3) return ['pattern' => 'netral', 'bias' => 0.0, 'score' => 0];
 
     $a = $candles[$n - 2];
     $b = $candles[$n - 1];
@@ -291,66 +255,35 @@ function detectPattern(array $candles): array
     $bodyB = abs($b['close'] - $b['open']);
     $rangeB = max($b['high'] - $b['low'], 1e-9);
 
-    $isDoji = $bodyB / $rangeB < 0.1;
-    if ($isDoji) {
-        return ['pattern' => 'doji', 'bias' => 0.0, 'score' => 55];
-    }
+    if ($bodyB / $rangeB < 0.1) return ['pattern' => 'doji', 'bias' => 0.0, 'score' => 55];
 
-    $bullEngulf = $a['close'] < $a['open']
-        && $b['close'] > $b['open']
-        && $b['close'] >= $a['open']
-        && $b['open'] <= $a['close']
-        && $bodyB > $bodyA;
+    $bullEngulf = $a['close'] < $a['open'] && $b['close'] > $b['open'] && $b['close'] >= $a['open'] && $b['open'] <= $a['close'] && $bodyB > $bodyA;
+    if ($bullEngulf) return ['pattern' => 'bullish engulfing', 'bias' => 0.015, 'score' => 66];
 
-    if ($bullEngulf) {
-        return ['pattern' => 'bullish engulfing', 'bias' => 0.015, 'score' => 66];
-    }
-
-    $bearEngulf = $a['close'] > $a['open']
-        && $b['close'] < $b['open']
-        && $b['open'] >= $a['close']
-        && $b['close'] <= $a['open']
-        && $bodyB > $bodyA;
-
-    if ($bearEngulf) {
-        return ['pattern' => 'bearish engulfing', 'bias' => -0.015, 'score' => 66];
-    }
+    $bearEngulf = $a['close'] > $a['open'] && $b['close'] < $b['open'] && $b['open'] >= $a['close'] && $b['close'] <= $a['open'] && $bodyB > $bodyA;
+    if ($bearEngulf) return ['pattern' => 'bearish engulfing', 'bias' => -0.015, 'score' => 66];
 
     $upperWick = $b['high'] - max($b['close'], $b['open']);
     $lowerWick = min($b['close'], $b['open']) - $b['low'];
 
-    if ($lowerWick > ($bodyB * 1.8) && $upperWick < $bodyB) {
-        return ['pattern' => 'hammer', 'bias' => 0.01, 'score' => 62];
-    }
-
-    if ($upperWick > ($bodyB * 1.8) && $lowerWick < $bodyB) {
-        return ['pattern' => 'shooting star', 'bias' => -0.01, 'score' => 62];
-    }
+    if ($lowerWick > ($bodyB * 1.8) && $upperWick < $bodyB) return ['pattern' => 'hammer', 'bias' => 0.01, 'score' => 62];
+    if ($upperWick > ($bodyB * 1.8) && $lowerWick < $bodyB) return ['pattern' => 'shooting star', 'bias' => -0.01, 'score' => 62];
 
     return ['pattern' => 'netral', 'bias' => 0.0, 'score' => 58];
 }
 
 function pct(float $a, float $b): float
 {
-    if ($a == 0.0) {
-        return 0.0;
-    }
-
-    return ($b - $a) / $a;
+    return $a == 0.0 ? 0.0 : ($b - $a) / $a;
 }
 
 $pair = safePair($_GET['pair'] ?? 'BTCIDR');
 $resolution = strtoupper((string)($_GET['resolution'] ?? '240'));
-if (!in_array($resolution, ['60', '240', 'D'], true)) {
-    $resolution = '240';
-}
+if (!in_array($resolution, ['60', '240', 'D'], true)) $resolution = '240';
 
 $candles = fetchCandles($pair, $resolution);
 if (count($candles) < 80) {
-    jsonOut([
-        'ok' => false,
-        'error' => 'Data candle kurang. Coba pair lain.',
-    ], 422);
+    jsonOut(['ok' => false, 'error' => 'Data candle kurang dari batas wajar. Coba pair lain.'], 422);
 }
 
 $closes = array_column($candles, 'close');
@@ -368,17 +301,12 @@ $monthAgo = $closes[max(0, count($closes) - 31)];
 
 $trendFast = pct((float)$weekAgo, (float)$last);
 $trendSlow = pct((float)$monthAgo, (float)$last);
-$trendCross = ($ema20Last !== false && $ema50Last !== false && $ema50Last > 0)
-    ? (($ema20Last - $ema50Last) / $ema50Last)
-    : 0.0;
+$trendCross = ($ema20Last !== false && $ema50Last !== false && $ema50Last > 0) ? (($ema20Last - $ema50Last) / $ema50Last) : 0.0;
 
 $rsiBias = 0.0;
 if ($rsi14 !== null) {
-    if ($rsi14 < 30) {
-        $rsiBias = 0.008;
-    } elseif ($rsi14 > 70) {
-        $rsiBias = -0.008;
-    }
+    if ($rsi14 < 30) $rsiBias = 0.008;
+    elseif ($rsi14 > 70) $rsiBias = -0.008;
 }
 
 $volatility = $last > 0 ? ($atr14 / $last) : 0.0;
@@ -386,39 +314,21 @@ $rawDrift = ($trendFast * 0.38) + ($trendSlow * 0.20) + ($trendCross * 0.32) + $
 $drift = max(-0.06, min(0.06, $rawDrift));
 $riskDampen = max(0.25, 1 - ($volatility * 2.5));
 
-$horizons = [
-    'besok' => 1,
-    'lusa' => 2,
-    '7_hari' => 7,
-    '30_hari' => 30,
-];
-
+$horizons = ['besok' => 1, 'lusa' => 2, '7_hari' => 7, '30_hari' => 30];
 $predictions = [];
 foreach ($horizons as $label => $days) {
     $adjTrend = $drift * sqrt($days) * $riskDampen;
     $volBand = $volatility * sqrt($days) * 0.8;
-
     $base = $last * (1 + $adjTrend);
-    $low = $base * (1 - $volBand);
-    $high = $base * (1 + $volBand);
-
-    $confidence = (int)round(max(40, min(92,
-        72
-        - ($volatility * 200)
-        + (abs($trendCross) * 100)
-        + ($pattern['score'] - 58) * 0.6
-    )));
-
+    
     $predictions[$label] = [
         'days' => $days,
         'target' => round($base, 2),
-        'range_low' => round($low, 2),
-        'range_high' => round($high, 2),
-        'confidence' => $confidence,
+        'range_low' => round($base * (1 - $volBand), 2),
+        'range_high' => round($base * (1 + $volBand), 2),
+        'confidence' => (int)round(max(40, min(92, 72 - ($volatility * 200) + (abs($trendCross) * 100) + ($pattern['score'] - 58) * 0.6))),
     ];
 }
-
-$history = array_slice($candles, -180);
 
 jsonOut([
     'ok' => true,
@@ -437,5 +347,5 @@ jsonOut([
         'volatility_ratio' => $volatility,
     ],
     'predictions' => $predictions,
-    'history' => $history,
+    'history' => array_slice($candles, -180),
 ]);
