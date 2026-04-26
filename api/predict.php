@@ -16,6 +16,121 @@ function safePair(string $pair): string
     return $clean !== '' ? $clean : 'BTCIDR';
 }
 
+function requestUrl(string $url): array
+{
+    $resp = false;
+    $code = 0;
+    $err = '';
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)',
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json,text/plain,*/*',
+                'Origin: https://indodax.com',
+                'Referer: https://indodax.com/',
+            ],
+        ]);
+
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'timeout' => 20,
+                'header' =>
+                    "User-Agent: Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)\r\n" .
+                    "Accept: application/json,text/plain,*/*\r\n" .
+                    "Origin: https://indodax.com\r\n" .
+                    "Referer: https://indodax.com/\r\n",
+            ],
+        ]);
+
+        $resp = @file_get_contents($url, false, $ctx);
+        $httpResponseHeader = $http_response_header ?? [];
+        if (isset($httpResponseHeader[0]) && preg_match('/\\s(\\d{3})\\s/', $httpResponseHeader[0], $m)) {
+            $code = (int)$m[1];
+        }
+        if ($resp === false) {
+            $err = 'Gagal mengambil data via HTTP stream.';
+        }
+    }
+
+    return ['body' => $resp, 'code' => $code, 'error' => $err];
+}
+
+function resolutionToSeconds(string $resolution): int
+{
+    return match ($resolution) {
+        '60' => 3600,
+        '240' => 14400,
+        'D' => 86400,
+        default => 14400,
+    };
+}
+
+function pairToApiPair(string $pair): string
+{
+    foreach (['USDT', 'IDR', 'BTC', 'ETH'] as $quote) {
+        if (str_ends_with($pair, $quote)) {
+            $base = substr($pair, 0, -strlen($quote));
+            if ($base !== '') {
+                return strtolower($base . '_' . $quote);
+            }
+        }
+    }
+    return strtolower($pair);
+}
+
+function candlesFromTrades(string $pair, string $resolution, int $from, int $to): array
+{
+    $apiPair = pairToApiPair($pair);
+    $url = "https://indodax.com/api/{$apiPair}/trades";
+    $r = requestUrl($url);
+    if ($r['body'] === false || $r['code'] >= 400 || $r['code'] === 0) {
+        return [];
+    }
+
+    $trades = json_decode((string)$r['body'], true);
+    if (!is_array($trades) || count($trades) === 0) {
+        return [];
+    }
+
+    $bucket = resolutionToSeconds($resolution);
+    $map = [];
+    foreach ($trades as $t) {
+        $ts = (int)($t['date'] ?? 0);
+        $price = (float)($t['price'] ?? 0);
+        if ($ts < $from || $ts > $to || $price <= 0) {
+            continue;
+        }
+        $k = (int)(floor($ts / $bucket) * $bucket);
+        if (!isset($map[$k])) {
+            $map[$k] = [
+                'time' => $k,
+                'open' => $price,
+                'high' => $price,
+                'low' => $price,
+                'close' => $price,
+            ];
+        } else {
+            $map[$k]['high'] = max($map[$k]['high'], $price);
+            $map[$k]['low'] = min($map[$k]['low'], $price);
+            $map[$k]['close'] = $price;
+        }
+    }
+
+    ksort($map);
+    return array_values($map);
+}
+
 function fetchCandles(string $pair, string $resolution = '240', int $lookbackDays = 210): array
 {
     $to = time();
@@ -41,54 +156,13 @@ function fetchCandles(string $pair, string $resolution = '240', int $lookbackDay
 
     $resp = false;
     $code = 0;
-    $err = '';
     $errors = [];
 
     foreach ($urls as $url) {
-        $resp = false;
-        $code = 0;
-        $err = '';
-
-        if (function_exists('curl_init')) {
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT => 20,
-                CURLOPT_CONNECTTIMEOUT => 10,
-                CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)',
-                CURLOPT_HTTPHEADER => [
-                    'Accept: application/json,text/plain,*/*',
-                    'Origin: https://indodax.com',
-                    'Referer: https://indodax.com/',
-                ],
-            ]);
-
-            $resp = curl_exec($ch);
-            $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            $err = curl_error($ch);
-            curl_close($ch);
-        } else {
-            $ctx = stream_context_create([
-                'http' => [
-                    'method' => 'GET',
-                    'timeout' => 20,
-                    'header' =>
-                        "User-Agent: Mozilla/5.0 (compatible; AnalisisMarketBot/1.0)\r\n" .
-                        "Accept: application/json,text/plain,*/*\r\n" .
-                        "Origin: https://indodax.com\r\n" .
-                        "Referer: https://indodax.com/\r\n",
-                ],
-            ]);
-
-            $resp = @file_get_contents($url, false, $ctx);
-            $httpResponseHeader = $http_response_header ?? [];
-            if (isset($httpResponseHeader[0]) && preg_match('/\\s(\\d{3})\\s/', $httpResponseHeader[0], $m)) {
-                $code = (int)$m[1];
-            }
-            if ($resp === false) {
-                $err = 'Gagal mengambil data via HTTP stream.';
-            }
-        }
+        $r = requestUrl($url);
+        $resp = $r['body'];
+        $code = (int)$r['code'];
+        $err = (string)$r['error'];
 
         if ($resp !== false && $code > 0 && $code < 400) {
             break;
@@ -98,6 +172,10 @@ function fetchCandles(string $pair, string $resolution = '240', int $lookbackDay
     }
 
     if ($resp === false || $code >= 400 || $code === 0) {
+        $candlesFromTradeFallback = candlesFromTrades($pair, $resolution, $from, $to);
+        if (count($candlesFromTradeFallback) > 20) {
+            return $candlesFromTradeFallback;
+        }
         jsonOut([
             'ok' => false,
             'error' => 'Gagal mengambil data Indodax.',
