@@ -19,3 +19,8 @@ Buka `http://localhost:8080`.
 ## Catatan Akurasi
 
 Model ini memaksimalkan akurasi dari sisi teknikal (statistical projection), namun tetap tidak menjamin hasil pasar karena crypto sangat volatil.
+
+Update model terbaru:
+- Proyeksi per horizon dihitung independen (besok, lusa, 1 minggu, 1 bulan), bukan angka linear.
+- Menambahkan sinyal arah (`naik/turun/sideways`) + tingkat keyakinan arah.
+- Menambahkan efek mean reversion agar prediksi jangka menengah/panjang tidak selalu mengikuti gerak harian.

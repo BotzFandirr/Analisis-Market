@@ -277,6 +277,11 @@ function pct(float $a, float $b): float
     return $a == 0.0 ? 0.0 : ($b - $a) / $a;
 }
 
+function clamp(float $value, float $min, float $max): float
+{
+    return max($min, min($max, $value));
+}
+
 $pair = safePair($_GET['pair'] ?? 'BTCIDR');
 $resolution = strtoupper((string)($_GET['resolution'] ?? '240'));
 if (!in_array($resolution, ['60', '240', 'D'], true)) $resolution = '240';
@@ -298,7 +303,11 @@ $pattern = detectPattern($candles);
 $last = $closes[count($closes) - 1];
 $weekAgo = $closes[max(0, count($closes) - 8)];
 $monthAgo = $closes[max(0, count($closes) - 31)];
+$dayAgo = $closes[max(0, count($closes) - 2)];
+$threeDaysAgo = $closes[max(0, count($closes) - 4)];
 
+$trend1D = pct((float)$dayAgo, (float)$last);
+$trend3D = pct((float)$threeDaysAgo, (float)$last);
 $trendFast = pct((float)$weekAgo, (float)$last);
 $trendSlow = pct((float)$monthAgo, (float)$last);
 $trendCross = ($ema20Last !== false && $ema50Last !== false && $ema50Last > 0) ? (($ema20Last - $ema50Last) / $ema50Last) : 0.0;
@@ -310,23 +319,49 @@ if ($rsi14 !== null) {
 }
 
 $volatility = $last > 0 ? ($atr14 / $last) : 0.0;
-$rawDrift = ($trendFast * 0.38) + ($trendSlow * 0.20) + ($trendCross * 0.32) + $rsiBias + $pattern['bias'];
-$drift = max(-0.06, min(0.06, $rawDrift));
-$riskDampen = max(0.25, 1 - ($volatility * 2.5));
 
 $horizons = ['besok' => 1, 'lusa' => 2, '7_hari' => 7, '30_hari' => 30];
 $predictions = [];
 foreach ($horizons as $label => $days) {
-    $adjTrend = $drift * sqrt($days) * $riskDampen;
-    $volBand = $volatility * sqrt($days) * 0.8;
-    $base = $last * (1 + $adjTrend);
+    // Per-horizon forecast agar tidak selalu bergerak linear naik/turun antar periode.
+    $shortMomentum = ($trend1D * 0.45) + ($trend3D * 0.35) + ($trendFast * 0.20);
+    $momentumDecay = exp(-$days / 8);
+    $trendBuild = 1 - exp(-$days / 18);
+    $meanReversion = -$shortMomentum * min(0.55, $days / 30 * 0.55);
+    $crossEffect = $trendCross * (0.22 + ($days / 100));
+    $patternEffect = $pattern['bias'] * exp(-$days / 6);
+    $rsiEffect = $rsiBias * (0.8 + ($days / 40));
+    $slowTrendEffect = $trendSlow * $trendBuild * 0.55;
+
+    $rawReturn = ($shortMomentum * $momentumDecay * 0.9)
+        + $slowTrendEffect
+        + $crossEffect
+        + $meanReversion
+        + $patternEffect
+        + $rsiEffect;
+
+    $volatilityCap = max(0.012, min(0.25, $volatility * sqrt($days) * 2.2));
+    $expectedReturn = clamp($rawReturn, -$volatilityCap, $volatilityCap);
+    $base = $last * (1 + $expectedReturn);
+
+    $volBand = max(0.008, $volatility * sqrt($days) * 0.9);
+    $rangeLow = $base * (1 - $volBand);
+    $rangeHigh = $base * (1 + $volBand);
+
+    $dirScore = ($expectedReturn * 180) + ($trendCross * 20) + ($pattern['bias'] * 220);
+    $direction = 'sideways';
+    if ($dirScore > 0.6) $direction = 'naik';
+    if ($dirScore < -0.6) $direction = 'turun';
+    $directionConfidence = (int)round(clamp(50 + abs($dirScore) * 2.8, 50, 92));
     
     $predictions[$label] = [
         'days' => $days,
         'target' => round($base, 2),
-        'range_low' => round($base * (1 - $volBand), 2),
-        'range_high' => round($base * (1 + $volBand), 2),
-        'confidence' => (int)round(max(40, min(92, 72 - ($volatility * 200) + (abs($trendCross) * 100) + ($pattern['score'] - 58) * 0.6))),
+        'range_low' => round($rangeLow, 2),
+        'range_high' => round($rangeHigh, 2),
+        'direction' => $direction,
+        'direction_confidence' => $directionConfidence,
+        'confidence' => (int)round(clamp(74 - ($volatility * 180) + (abs($trendCross) * 80) + ($pattern['score'] - 58) * 0.55, 40, 92)),
     ];
 }
 
@@ -341,6 +376,8 @@ jsonOut([
         'rsi14' => $rsi14,
         'atr14' => $atr14,
         'trend_fast' => $trendFast,
+        'trend_1d' => $trend1D,
+        'trend_3d' => $trend3D,
         'trend_slow' => $trendSlow,
         'trend_cross' => $trendCross,
         'pattern' => $pattern['pattern'],
