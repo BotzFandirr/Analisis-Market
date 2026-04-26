@@ -50,8 +50,11 @@ $defaultPair = 'BTCIDR';
     <section class="grid-two">
       <article class="card">
         <h2>Harga Historis & Proyeksi</h2>
-        <canvas id="priceChart" height="130"></canvas>
+        <div class="chart-container">
+          <canvas id="priceChart"></canvas>
+        </div>
       </article>
+
       <article class="card">
         <h2>Ringkasan Sinyal</h2>
         <div id="signals" class="signals"></div>
